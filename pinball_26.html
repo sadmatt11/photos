@@ -1,0 +1,1331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ALPHABET CITY PINBALL</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@700;900&family=Special+Elite&display=swap');
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:100%;height:100%;background:#000;overflow:hidden;
+  display:flex;align-items:center;justify-content:center;font-family:'Special Elite',cursive;}
+#wrap{position:relative;display:flex;align-items:center;justify-content:center;
+  width:100%;height:100%;}
+#hud{
+  position:absolute;top:0;left:50%;transform:translateX(-50%);
+  width:500px;
+  display:grid;grid-template-columns:1fr 1fr 1fr 1fr;
+  background:rgba(4,0,8,.92);border-bottom:2px solid #ff2266;
+  padding:.4rem .8rem;z-index:10;
+}
+.hc{text-align:center}
+.hl{font-size:.45rem;letter-spacing:.15em;color:#440022;text-transform:uppercase}
+.hv{font-family:'Oswald',sans-serif;font-weight:900;font-size:1.05rem;line-height:1.1}
+.p{color:#ff2266;text-shadow:0 0 10px #ff226699}
+.b{color:#22aaff;text-shadow:0 0 10px #22aaff99}
+.g{color:#22ff88;text-shadow:0 0 10px #22ff8899}
+.y{color:#ffdd00;text-shadow:0 0 10px #ffdd0099}
+#foot{position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+  width:500px;background:rgba(4,0,8,.92);border-top:1px solid #220011;
+  display:flex;justify-content:space-between;padding:.3rem .8rem;z-index:10;}
+.fh{font-size:.52rem;color:#440022}
+.fk{background:#0a0010;border:1px solid #440022;padding:.08rem .28rem;
+  border-radius:2px;font-family:'Oswald',sans-serif;font-size:.54rem;color:#ff2266;margin:0 .08rem}
+#msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  text-align:center;z-index:20;pointer-events:none;}
+#msg h1{font-family:'Oswald',sans-serif;font-size:2.8rem;font-weight:900;
+  color:#ff2266;text-shadow:0 0 30px #ff226699;line-height:1;}
+#msg h2{font-family:'Oswald',sans-serif;font-size:1.1rem;color:#ffdd00;margin-top:.4rem}
+#msg p{font-size:.85rem;color:rgba(255,34,102,.6);margin-top:.8rem;
+  animation:blink 1.2s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:.8}50%{opacity:.2}}
+canvas{display:block;}
+/* touch buttons removed */
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="hud">
+    <div class="hc"><div class="hl">Score</div><div class="hv p" id="hs">0</div></div>
+    <div class="hc"><div class="hl">Best</div><div class="hv y" id="hb">0</div></div>
+    <div class="hc"><div class="hl">Ball</div><div class="hv b" id="hball">3</div></div>
+    <div class="hc"><div class="hl">Mult</div><div class="hv g" id="hm">x1</div></div>
+  </div>
+  <canvas id="c"></canvas>
+  <div id="foot">
+    <span class="fh"><span class="fk">Z</span><span class="fk">◀</span> West</span>
+    <span class="fh">Launch: <span class="fk">SPACE</span></span>
+    <span class="fh">East <span class="fk">▶</span><span class="fk">/</span></span>
+  </div>
+  </div>
+
+<!-- Matter.js + attractors plugin -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+window.addEventListener('load', function() {
+// ═══════════════════════════════════════════════════════════
+const { Engine, Render, Runner, Bodies, Body, Composite, Composites,
+        Constraint, Events, Vector, Mouse, Common } = Matter;
+
+// ── Layout constants ──────────────────────────────────────
+const TW = 500, TH = 900; // table world size
+const BALL_R = 13;
+
+// Scaled canvas
+const canvas = document.getElementById('c');
+let scale = 1;
+function resizeCanvas() {
+  const wrap = document.getElementById('wrap');
+  const avail = Math.min(wrap.clientWidth, wrap.clientHeight * TW/TH);
+  scale = Math.min(1, avail / TW);
+  canvas.style.width  = (TW * scale) + 'px';
+  canvas.style.height = (TH * scale) + 'px';
+  canvas.width  = TW;
+  canvas.height = TH;
+  // reposition touch buttons
+  const cx = (wrap.clientWidth - TW*scale)/2;
+  const tL=document.getElementById('tbtnL');
+  const tR=document.getElementById('tbtnR');
+  if(tL) tL.style.left  = (cx+10)+'px';
+  if(tR) tR.style.right = (cx+10)+'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ── Audio ─────────────────────────────────────────────────
+let AC;
+function au() { if (!AC) AC = new(window.AudioContext||window.webkitAudioContext)(); }
+function beep(f,d,t='square',v=0.18){
+  if(!AC)return;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type=t;o.frequency.value=f;
+  g.gain.setValueAtTime(.001,AC.currentTime);
+  g.gain.linearRampToValueAtTime(v,AC.currentTime+.012);
+  g.gain.exponentialRampToValueAtTime(.001,AC.currentTime+d);
+  o.connect(g);g.connect(AC.destination);
+  o.start();o.stop(AC.currentTime+d+.04);
+}
+const S={
+  flip:  ()=>beep(140,.05,'triangle',.09),
+  bump:  ()=>{beep(280,.06,'square',.2);setTimeout(()=>beep(420,.04,'sine',.1),20);},
+  tgt:   ()=>beep(720,.055,'triangle',.13),
+  drain: ()=>{beep(80,.45,'sawtooth',.2);setTimeout(()=>beep(55,.7,'sawtooth',.14),100);},
+  bonus: ()=>[523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.13,'triangle',.13),i*75)),
+  rent:  ()=>[392,523,659,784].forEach((f,i)=>setTimeout(()=>beep(f,.17,'triangle',.15),i*65)),
+  multi: ()=>[262,330,392,523,659].forEach((f,i)=>setTimeout(()=>beep(f,.16,'square',.11),i*55)),
+  kick:  ()=>beep(180,.06,'triangle',.12),
+  launch:()=>{beep(200,.08,'sawtooth',.2);setTimeout(()=>beep(300,.06,'sine',.12),60);},
+};
+
+// ── Game state ────────────────────────────────────────────
+let score=0, best=+localStorage.getItem('acpb5')||0;
+let balls=3, mult=1, mTimer=0;
+let running=false, draining=false;
+let ballSaveActive=false;
+let ballsInPlay=1; // track active balls for proper drain logic
+
+// ── Multiball system — MULTIPLE triggers ──────────────────
+let multiballActive=false;
+let rentHits=0;        // RENT x3 → multiball
+let allBumpersHit=0;   // hit every bumper → surprise ball
+let bothBanksDone=0;   // clear both banks same ball → multiball
+let surpriseCooldown=0;
+
+function spawnExtraBall(x,y,label){
+  const eb=Bodies.circle(x,y,BALL_R,{
+    restitution:.8,friction:.001,frictionAir:.003,density:.002,label:'pinball'
+  });
+  Body.setVelocity(eb,{x:(Math.random()-.5)*10,y:-20-Math.random()*6});
+  Composite.add(world,eb);
+  ballsInPlay++;
+}
+
+function triggerMultiball(name,col,n=2){
+  multiballActive=true;
+  const count=Math.min(n,2); // never more than 2 extra balls
+  ftext('✦ '+name+' ✦',TW/2,TH/2-80,col,26,220);
+  burst(TW/2,TH/3,col,60,10);
+  screenFlash(col,25);
+  S.multi();
+  bumpMult();bumpMult();
+  for(let k=0;k<count;k++){
+    setTimeout(()=>spawnExtraBall(TW/2+(k?55:-55),310,'#fff'),k*250);
+  }
+  addScore(3000,TW/2,TH/2,name+'!');
+}
+
+// ── Ball lock ─────────────────────────────────────────────
+// CBGB bumper = ball lock target. Lock 2 → release for 3-ball multiball
+let locked=0, lockCooldown=0;
+
+// ── Mystery bumper ────────────────────────────────────────
+let mysteryBumper=-1, mysteryTimer=0;
+function pickMystery(){
+  mysteryBumper=Math.floor(Math.random()*bumperData.length);
+  mysteryTimer=600; // 10 seconds
+  ftext('★ MYSTERY BUMPER ★',TW/2,TH/2-55,'#ff88ff',16,120);
+}
+
+// ── Missions ──────────────────────────────────────────────
+const MISSIONS = [
+  { txt:'Hit RENT 3x → MULTIBALL',     check:()=>rentHits>=3,                    reward:5000  },
+  { txt:'Spell A·B·C·D → MULTIBALL',   check:()=>aveData.every(a=>a.hit),        reward:8000  },
+  { txt:'Hit every bumper',             check:()=>allBumpersHit>=bumperData.length,reward:6000  },
+  { txt:"Bar crawl: McSorley's+Mona's+CBGB", check:()=>mHits.bar>=3,             reward:7000  },
+  { txt:'15 bumper hits',               check:()=>mHits.bumpers>=15,              reward:4000  },
+  { txt:'Clear both banks',             check:()=>bankL.every(t=>t.hit)&&bankR.every(t=>t.hit), reward:9000 },
+];
+let curMission=null, mHits={RENT:0,bumpers:0,bar:0,bumperSet:new Set()};
+let missionDone=false;
+
+function assignMission(){
+  curMission=MISSIONS[Math.floor(Math.random()*MISSIONS.length)];
+  mHits={RENT:0,bumpers:0,bar:0,bumperSet:new Set()};
+  missionDone=false; rentHits=0; allBumpersHit=0;
+  locked=0; bothBanksDone=0;
+}
+
+function checkMission(){
+  if(!curMission||missionDone)return;
+  if(curMission.check()){
+    missionDone=true;
+    const reward=curMission.reward*mult;
+    score+=reward; if(score>best){best=score;localStorage.setItem('acpb5',best);}
+    setHUD();
+    ftext('MISSION COMPLETE!',TW/2,TH/2-80,'#ffdd00',26,220);
+    ftext('+'+reward.toLocaleString(),TW/2,TH/2-44,'#ffdd00',20,160);
+    burst(TW/2,TH*.4,'#ffdd00',55,10);
+    screenFlash('#ffdd00',20); S.bonus(); bumpMult();
+  }
+}
+
+// ── Fever Mode ────────────────────────────────────────────
+let fever=false, feverTimer=0, feverHits=0;
+const FEVER_HITS=5;
+
+function triggerFever(){
+  if(fever){ feverTimer=420; return; }
+  fever=true; feverTimer=420;
+  mult=Math.min(8,mult+2); mTimer=420;
+  ftext('🔥 FEVER MODE 🔥',TW/2,TH/2-70,'#ff4400',26,200);
+  screenFlash('#ff4400',22); S.multi(); setHUD();
+}
+
+// ── Jackpot ───────────────────────────────────────────────
+let jackpot=5000, jackpotLit=false, jackpotTimer=0;
+
+function triggerJackpot(){
+  const j=jackpot*mult;
+  score+=j; if(score>best){best=score;localStorage.setItem('acpb5',best);}
+  setHUD();
+  ftext('★ JACKPOT ★',TW/2,TH/2-80,'#ff88ff',32,220);
+  ftext('+'+j.toLocaleString(),TW/2,TH/2-44,'#ff88ff',22,180);
+  burst(TW/2,300,'#ff88ff',70,11); screenFlash('#ff44ff',25); S.rent();
+  jackpot=Math.min(jackpot+3000,80000);
+  jackpotLit=false; jackpotTimer=0;
+}
+
+// ── Surprise random events — score bonuses only, no extra balls ──
+let surpriseTimer=Math.floor(Math.random()*300)+480;
+const SURPRISES=[
+  ()=>{ ftext('2x POINTS — 10 SECONDS!',TW/2,TH/2-60,'#ffdd00',18,140);
+        screenFlash('#ffdd00',12); mult=Math.min(8,mult+2); mTimer=600; setHUD(); S.multi(); },
+  ()=>{ ftext('★ MYSTERY BUMPER ★',TW/2,TH/2-60,'#ff88ff',18,140);
+        pickMystery(); screenFlash('#ff88ff',10); },
+  ()=>{ ftext('JACKPOT LIT!',TW/2,TH/2-60,'#ff88ff',20,140);
+        jackpotLit=true; jackpotTimer=400; screenFlash('#ff44ff',12); S.rent(); },
+  ()=>{ const bonus=2000*mult; score+=bonus; if(score>best){best=score;localStorage.setItem('acpb5',best);}
+        ftext('LUCKY BREAK +'+bonus.toLocaleString(),TW/2,TH/2-60,'#22ff88',18,140);
+        screenFlash('#22ff88',10); setHUD(); S.bonus(); },
+];
+
+// ── Hot streak ────────────────────────────────────────────
+let streak=0, streakTimer=0;
+const STREAK_MSGS=['ON FIRE','UNSTOPPABLE','LEGEND','ALPHABET CITY KING'];
+
+// ── Screen flash ──────────────────────────────────────────
+let flashCol='', flashLife=0;
+function screenFlash(col,life){ flashCol=col; flashLife=life; }
+
+// ── Floating text ─────────────────────────────────────────
+const ctx = canvas.getContext('2d');
+const FT = [];
+function ftext(t,x,y,col='#fff',sz=14,life=90){
+  FT.push({t,x,y,col,sz,life,vy:-.6});
+}
+function addScore(pts,x,y,lbl=''){
+  const p=pts*(fever?mult*2:mult); score+=p;
+  if(score>best){best=score;localStorage.setItem('acpb5',best);}
+  ftext(lbl?lbl:'+'+p.toLocaleString(),x,y-20,fever?'#ff8800':'#fff',fever?15:13,80);
+  setHUD();
+}
+function bumpMult(){ mult=Math.min(8,mult+1); mTimer=300; setHUD(); }
+function setHUD(){
+  document.getElementById('hs').textContent=score.toLocaleString();
+  document.getElementById('hb').textContent=best.toLocaleString();
+  document.getElementById('hball').textContent=balls;
+  const activeBalls=Composite.allBodies(world).filter(b=>b.label==='pinball').length;
+  const ballDisplay= activeBalls>1 ? balls+'  🔴x'+activeBalls : balls;
+  document.getElementById('hm').textContent= fever?'🔥x'+mult:'x'+mult;
+}
+
+// ── Particles ─────────────────────────────────────────────
+const PARTS=[];
+function burst(x,y,col,n=12,spd=5){
+  for(let i=0;i<n;i++){
+    const a=Math.random()*Math.PI*2,s=1+Math.random()*spd;
+    PARTS.push({x,y,vx:Math.cos(a)*s,vy:Math.sin(a)*s-1.5,
+      r:1.5+Math.random()*4,life:28+~~(Math.random()*22),max:50,col});
+  }
+}
+
+// ── Matter.js setup ───────────────────────────────────────
+const engine = Engine.create({ gravity: { y: 1.2 } });
+const world  = engine.world;
+
+// We use our own renderer for theming, but let Matter handle physics
+let pinball, leftFlipper, rightFlipper;
+let leftPivot, rightPivot;
+
+// Flipper state
+let leftUp=false, rightUp=false;
+const FLIP_SPEED = 0.7;
+const LF_REST =  0.40, LF_UP = -0.50;   // flatter at rest = more drain coverage
+const RF_REST = Math.PI-0.40, RF_UP = Math.PI+0.50;
+let lfAngle=LF_REST, rfAngle=RF_REST;
+let lfPrev=LF_REST, rfPrev=RF_REST;
+
+// Bumper bodies (for collision detection reference)
+const bumperBodies = [];
+const bumperData = [
+  // Center cluster — Tompkins Square Park geography, all in open space
+  {x:250,y:210,r:28,lbl:'RENT',        col:'#ff2266',pts:500},
+  {x:160,y:270,r:22,lbl:'TOMPKINS',    col:'#22cc66',pts:200},
+  {x:340,y:270,r:22,lbl:'SQUARE',      col:'#22cc66',pts:200},
+  {x:250,y:330,r:20,lbl:'PARK',        col:'#22cc66',pts:150},
+  // Second row — well away from side walls (left wall x=40, right wall x=460)
+  // Min safe x = 40 + wall_thickness + bumper_r + gap = ~100
+  {x:130,y:380,r:19,lbl:"McSORLEY'S", col:'#c88010',pts:300},
+  {x:370,y:380,r:19,lbl:"MONA'S",      col:'#22aaff',pts:300},
+  {x:200,y:440,r:18,lbl:'CBGB',        col:'#ff4400',pts:400},
+  {x:310,y:440,r:18,lbl:"DOC HOLLIDAY",col:'#aa44ff',pts:350},
+];
+const bumperFlash = bumperData.map(()=>0);
+
+// Avenue lane targets (hit = false when active)
+const aveData = [
+  {x: 82,y:118,w:40,h:15,lbl:'A',col:'#ff4444',hit:false,fl:0},
+  {x:158,y:104,w:40,h:15,lbl:'B',col:'#ff8800',hit:false,fl:0},
+  {x:248,y: 98,w:40,h:15,lbl:'C',col:'#ffdd00',hit:false,fl:0},
+  {x:332,y:104,w:40,h:15,lbl:'D',col:'#44ff88',hit:false,fl:0},
+];
+
+// Side banks
+const bankL=[
+  {x:36,y:440,w:28,h:13,lbl:"JOSIE'S", col:'#22aaff',pts:150,hit:false,fl:0},
+  {x:36,y:458,w:28,h:13,lbl:"SOPHIE'S",col:'#22aaff',pts:150,hit:false,fl:0},
+  {x:36,y:476,w:28,h:13,lbl:'E.11th',  col:'#22aaff',pts:100,hit:false,fl:0},
+  {x:36,y:494,w:28,h:13,lbl:'E.12th',  col:'#22aaff',pts:100,hit:false,fl:0},
+  {x:36,y:512,w:28,h:13,lbl:'E.13th',  col:'#22aaff',pts:100,hit:false,fl:0},
+];
+const bankR=[
+  {x:436,y:440,w:28,h:13,lbl:"KATZ'S", col:'#ff8800',pts:150,hit:false,fl:0},
+  {x:436,y:458,w:28,h:13,lbl:'B&H',    col:'#ff8800',pts:150,hit:false,fl:0},
+  {x:436,y:476,w:28,h:13,lbl:'VESELKA',col:'#ff8800',pts:150,hit:false,fl:0},
+  {x:436,y:494,w:28,h:13,lbl:'2ND AVE',col:'#ff8800',pts:100,hit:false,fl:0},
+];
+
+// Moving target
+const MV={x:185,y:560,w:80,h:16,vx:1.6,lbl:"LUCY'S",col:'#ff88cc',pts:800,fl:0};
+
+// ── Build the table ───────────────────────────────────────
+function buildTable(){
+  const opts = { isStatic:true, friction:0, restitution:0.7, label:'wall' };
+  const W=TW, H=TH;
+  const L=40, R=460; // left/right walls
+  const PX=430; // plunger lane
+
+  function wall(x,y,w,h){ return Bodies.rectangle(x,y,w,h,opts); }
+  function seg(x1,y1,x2,y2,thick=8){
+    const cx=(x1+x2)/2,cy=(y1+y2)/2;
+    const len=Math.hypot(x2-x1,y2-y1);
+    const ang=Math.atan2(y2-y1,x2-x1);
+    return Bodies.rectangle(cx,cy,len,thick,{...opts,angle:ang});
+  }
+
+  const bodies=[];
+
+  // ── Outer boundary ──
+  bodies.push(wall(W/2,0,W,12));        // top
+  bodies.push(wall(L/2,H/2,L,H));       // left wall
+  bodies.push(wall(R+(W-R)/2,H/2,(W-R),H)); // right wall
+  bodies.push(wall(W/2,H+6,W,12));      // bottom (drain catch — below screen)
+
+  // ── Top: flat shelves both sides — NO diagonals, NO pockets ──
+  bodies.push(seg(L,   100, 340, 100, 12));  // left shelf
+  bodies.push(seg(340, 100, R,   100, 12));  // right shelf — full width
+
+  // ── Plunger lane ──
+  bodies.push(wall(405, H/2, 10, H));         // plunger left wall — full height
+  bodies.push(wall(W-5, H/2, 10, H));         // plunger right wall
+
+  // ── Kicker slingshots — short, steep, no pockets ──
+  bodies.push(seg(L,   580, L+55, 625, 12));
+  bodies.push(seg(R,   580, R-55, 625, 12));
+
+  // Center post: radius 24 at x=250, y=TH-88=812
+  // Left tip at rest: x≈228. Right tip at rest: x≈272.
+  // Post covers x=226–274 — completely seals the gap, ball cannot fall through center
+  bodies.push(Bodies.circle(TW/2, TH-88, 24, {
+    isStatic:true, friction:0, restitution:0.8, label:'wall'
+  }));
+
+  // ── Bumpers (circular static bodies, high restitution) ──
+  bumperData.forEach((b,i)=>{
+    const bb = Bodies.circle(b.x,b.y,b.r,{
+      isStatic:true, restitution:1.5, friction:0,
+      label:'bumper_'+i
+    });
+    bumperBodies.push(bb);
+    bodies.push(bb);
+  });
+
+  Composite.add(world, bodies);
+}
+
+// ── Flippers (custom angular physics, not Matter constraints) ──
+// We use RECTANGULAR bodies for each flipper, sized generously to prevent tunneling
+// and manually set their position/angle each frame
+function buildFlippers(){
+  const fOpts = {
+    isStatic:true, friction:0, restitution:0.4, label:'flipper',
+    frictionStatic:0
+  };
+  // FL=80 longer flippers, pivots at x=155/345 (inward) so tips meet near center
+  // At rest angle 0.40: tip x = 155+80*cos(0.40) = 155+73 = 228 (left)
+  //                      tip x = 345-73 = 272 (right)
+  // Gap = 272-228 = 44px — center post radius 24 covers x=226-274, sealing it completely
+  const FL=80, FT=22;
+  const LPX=155, RPX=TW-155, FPY=TH-105;
+
+  leftFlipper  = Bodies.rectangle(LPX+FL/2, FPY, FL,FT,{...fOpts,label:'flipperL'});
+  rightFlipper = Bodies.rectangle(RPX-FL/2, FPY, FL,FT,{...fOpts,label:'flipperR'});
+  leftPivot    = {x:LPX, y:FPY};
+  rightPivot   = {x:RPX, y:FPY};
+
+  Composite.add(world,[leftFlipper,rightFlipper]);
+}
+
+// Update flipper bodies each frame by setting angle + position
+function updateFlipperBodies(){
+  const FL=80;
+  lfPrev=lfAngle; rfPrev=rfAngle; // MUST save both before updating
+  const lTarget = leftUp  ? LF_UP : LF_REST;
+  const rTarget = rightUp ? RF_UP : RF_REST;
+  lfAngle += (lTarget-lfAngle)*FLIP_SPEED;
+  rfAngle += (rTarget-rfAngle)*FLIP_SPEED;
+
+  // Left flipper: pivot at (148, FPY), extends right along angle
+  const lfCX = leftPivot.x  + Math.cos(lfAngle)*FL/2;
+  const lfCY = leftPivot.y  + Math.sin(lfAngle)*FL/2;
+  Body.setPosition(leftFlipper, {x:lfCX,y:lfCY});
+  Body.setAngle(leftFlipper, lfAngle);
+
+  // Right flipper: pivot at (TW-148, FPY), extends left along angle
+  const rfCX = rightPivot.x + Math.cos(rfAngle)*FL/2;
+  const rfCY = rightPivot.y + Math.sin(rfAngle)*FL/2;
+  Body.setPosition(rightFlipper, {x:rfCX,y:rfCY});
+  Body.setAngle(rightFlipper, rfAngle);
+
+  // Give flippers angular velocity so ball launches properly
+  // Angular velocity = change in angle per step
+  const lfOmega = lfAngle - lfPrev;
+  const rfOmega = rfAngle - rfPrev;
+  Body.setAngularVelocity(leftFlipper,  lfOmega);
+  Body.setAngularVelocity(rightFlipper, rfOmega);
+}
+
+// ── Ball ──────────────────────────────────────────────────
+// Plunger state — ball sits in lane, player presses SPACE to launch
+let plungerCharge = 0;
+let plungerState  = 'idle'; // idle | charging | launched
+
+function createBall(){
+  // Center of plunger lane: left wall at x=405, right wall inner edge at x=460
+  // Center = 432. Spawn at y=500 — above ALL lower inlane geometry (starts y=648)
+  pinball = Bodies.circle(432, 500, BALL_R, {
+    restitution:0.8, friction:0.001, frictionAir:0.003,
+    density:0.002, label:'pinball',
+    collisionFilter:{ mask: 0 } // ghost until launched
+  });
+  Composite.add(world, pinball);
+  plungerState  = 'charging';
+  plungerCharge = 0;
+  draining      = false;
+  ballSaveActive= false;
+}
+
+function launchBall(){
+  if(!pinball || plungerState !== 'charging') return;
+  pinball.collisionFilter.mask = 0xFFFFFFFF;
+  // Always launch at near-full power — instant fun, no waiting
+  const power = 0.6 + plungerCharge * 0.4;
+  Body.setVelocity(pinball, { x: -1, y: -(32 + power * 8) });
+  plungerState  = 'launched';
+  plungerCharge = 0;
+  ballSaveActive= true;
+  setTimeout(() => ballSaveActive = false, 4000);
+  S.launch();
+  // Flash + fanfare on launch
+  screenFlash('#ff2266', 8);
+  ftext('ALPHABET CITY!', TW/2, TH/2-60, '#ff2266', 22, 120);
+}
+
+// ── Collision events ─────────────────────────────────────
+Events.on(engine, 'collisionStart', e=>{
+  if(!running)return;
+  e.pairs.forEach(p=>{
+    const a=p.bodyA, b=p.bodyB;
+    const ball = (a.label==='pinball')?a:(b.label==='pinball')?b:null;
+    const other= ball===a?b:a;
+    if(!ball)return;
+
+    // Bumper hit
+    if(other.label.startsWith('bumper_')){
+      const idx=+other.label.split('_')[1];
+      const bd=bumperData[idx];
+      if(bumperFlash[idx]===0){
+        bumperFlash[idx]=18;
+        const dx=ball.position.x-bd.x, dy=ball.position.y-bd.y;
+        const d=Math.hypot(dx,dy)||1;
+        const popSpeed = fever ? 20 : 15;
+        Body.setVelocity(ball,{ x:(dx/d)*popSpeed, y:(dy/d)*popSpeed });
+
+        // Mystery bumper jackpot
+        const isMystery = mysteryBumper===idx && mysteryTimer>0;
+        const pts = isMystery ? bd.pts*10 : bd.pts;
+        const lbl = isMystery ? '★ MYSTERY +'+pts*mult : (fever?'🔥':'') + bd.lbl;
+        if(isMystery){ screenFlash('#ff88ff',20); mysteryTimer=0; mysteryBumper=-1; S.rent(); }
+
+        S.bump();
+        burst(bd.x,bd.y,bd.col,fever?28:18,fever?9:6);
+        addScore(pts,bd.x,bd.y,lbl);
+        bumpMult();
+
+        // Mission + multiball tracking
+        mHits.bumpers++;
+        mHits.bumperSet.add(idx);
+        allBumpersHit = mHits.bumperSet.size;
+        if(bd.lbl==='RENT'){ mHits.RENT++; rentHits++; }
+        if(["McSORLEY'S","MONA'S","CBGB"].includes(bd.lbl)) mHits.bar++;
+        checkMission();
+
+        // RENT x3 → RENT MULTIBALL
+        if(rentHits===3){
+          rentHits=0;
+          triggerMultiball('RENT MULTIBALL','#ff2266',2);
+        }
+        // RENT x1 → quote + burst always
+        if(bd.lbl==='RENT'){
+          ftext('♪ NO DAY BUT TODAY ♪',TW/2,TH/2-60,'#ff2266',18,150);
+          burst(bd.x,bd.y,'#ff2266',30,8); S.rent();
+        }
+
+        // ALL BUMPERS hit → surprise ball
+        if(allBumpersHit>=bumperData.length && !multiballActive){
+          mHits.bumperSet.clear(); allBumpersHit=0;
+          ftext('ALL BUMPERS! +5000!',TW/2,TH/2-70,'#22cc66',20,180);
+          screenFlash('#22cc66',16); S.bonus();
+          addScore(5000,TW/2,TH/3,'ALL BUMPERS'); bumpMult();
+        }
+
+        // Hot streak
+        streak++; streakTimer=200;
+        if(streak>0&&streak%5===0){
+          const msg=STREAK_MSGS[Math.min(~~(streak/5)-1,STREAK_MSGS.length-1)];
+          ftext(msg+'!',TW/2,TH/2-105,'#ffdd00',17,140);
+          screenFlash('#ffdd00',8);
+        }
+
+        // Fever trigger
+        feverHits++;
+        if(!fever&&feverHits>=FEVER_HITS){ feverHits=0; triggerFever(); }
+        else if(fever){ feverHits=0; } // reset counter — already in fever
+
+        // Jackpot arm during fever
+        if(bd.lbl==='RENT'&&fever&&!jackpotLit){
+          jackpotLit=true; jackpotTimer=300;
+          ftext('JACKPOT LIT — HIT LUCY\'S!',TW/2,TH/2-60,'#ff88ff',16,150);
+          screenFlash('#ff44ff',12);
+        }
+
+        // Bar quotes
+        if(bd.lbl==='CBGB'){ ftext("HEY HO LET'S GO",TW/2,TH/2-60,'#ff4400',16,120);S.bonus(); }
+        if(bd.lbl==='DOC HOLLIDAY'){ ftext("I'M YOUR HUCKLEBERRY",TW/2,TH/2-60,'#aa44ff',14,120);S.bonus(); }
+        if(bd.lbl==="McSORLEY'S"){ ftext('CASH ONLY. SINCE 1854.',TW/2,TH/2-60,'#c88010',14,110); }
+        if(bd.lbl==="MONA'S"){ ftext('♪ BLUEGRASS MONDAY ♪',TW/2,TH/2-60,'#22aaff',14,110); }
+      }
+    }
+
+    // Flipper contact — strong angular velocity transfer = real pinball feel
+    if(other.label==='flipperL'||other.label==='flipperR'){
+      const isLeft = other.label==='flipperL';
+      const isUp   = isLeft ? leftUp : rightUp;
+      if(isUp){
+        const spd = Math.hypot(ball.velocity.x, ball.velocity.y);
+        const launch = Math.max(spd * 1.5, 28);
+        const dirX   = isLeft ? (2.0 + Math.random()*0.5) : -(2.0 + Math.random()*0.5);
+        Body.setVelocity(ball,{
+          x: dirX * 4,
+          y: -launch
+        });
+        S.flip();
+      }
+    }
+
+    // Kicker slingshot — serious velocity boost
+    if(other.label==='wall'){
+      const spd = Math.hypot(ball.velocity.x,ball.velocity.y);
+      if(spd>6 && ball.position.y>570 && ball.position.y<635 &&
+         (ball.position.x<96||ball.position.x>404)){
+        Body.setVelocity(ball,{x:ball.velocity.x*1.5,y:ball.velocity.y*1.5});
+        S.kick();
+        addScore(150,ball.position.x,ball.position.y,'KICKER!');
+        bumpMult();
+        burst(ball.position.x,ball.position.y,'#ff4444',14,6);
+        screenFlash('#ff4444',6);
+      }
+    }
+  });
+});
+
+// ── Per-frame hit checks (targets, moving objects) ────────
+function checkHits(){
+  if(!pinball||!running)return;
+  const bx=pinball.position.x, by=pinball.position.y;
+
+  // ── Plunger lane escape — only fires when ball is actually inside plunger lane (x>406) ──
+  if(plungerState==='launched' && bx > 406){
+    Body.setPosition(pinball, {x:400, y:by});
+    Body.setVelocity(pinball, {x:-14, y:pinball.velocity.y});
+  }
+  Composite.allBodies(world).filter(b=>b.label==='pinball'&&b!==pinball).forEach(b=>{
+    if(b.position.x > 406){
+      Body.setPosition(b, {x:400, y:b.position.y});
+      Body.setVelocity(b, {x:-14, y:b.velocity.y});
+    }
+  });
+
+  // Cap velocity on all balls
+  Composite.allBodies(world).filter(b=>b.label==='pinball').forEach(b=>{
+    const s2=Math.hypot(b.velocity.x,b.velocity.y);
+    if(s2>42) Body.setVelocity(b,{x:b.velocity.x/s2*34,y:b.velocity.y/s2*34});
+  });
+
+  // Check all active balls against targets
+  const activeBalls = Composite.allBodies(world).filter(b=>b.label==='pinball');
+
+  // Avenue lanes — any ball can hit
+  activeBalls.forEach(ball=>{
+    const ax2=ball.position.x, ay2=ball.position.y;
+    aveData.forEach((a,i)=>{
+      if(!a.hit&&ax2+BALL_R>a.x&&ax2-BALL_R<a.x+a.w&&ay2+BALL_R>a.y&&ay2-BALL_R<a.y+a.h){
+        a.hit=true;a.fl=35;
+        Body.setVelocity(ball,{x:ball.velocity.x,y:Math.abs(ball.velocity.y)*.8});
+        burst(a.x+a.w/2,a.y+a.h/2,a.col,12,5);S.tgt();
+        addScore(300,a.x+a.w/2,a.y,'AVE '+['A','B','C','D'][i]);
+        bumpMult();
+        if(aveData.every(av=>av.hit)){
+          aveData.forEach(av=>{av.hit=false;av.fl=0;});
+          triggerMultiball('AVENUE MULTIBALL','#ffdd00',2);
+        }
+      }
+      if(a.fl>0)a.fl--;
+    });
+  });
+
+  // Banks — any ball can hit
+  function doBank(bank){
+    activeBalls.forEach(ball=>{
+      const bx2=ball.position.x, by2=ball.position.y;
+      bank.forEach(t=>{
+        if(!t.hit&&bx2+BALL_R>t.x&&bx2-BALL_R<t.x+t.w&&by2+BALL_R>t.y&&by2-BALL_R<t.y+t.h){
+          t.hit=true;t.fl=22;
+          Body.setVelocity(ball,{x:-ball.velocity.x*.8,y:ball.velocity.y});
+          burst(t.x+t.w/2,t.y+t.h/2,t.col,10,4);S.tgt();
+          addScore(t.pts,bx2,by2,t.lbl);bumpMult();
+          if(t.lbl==="JOSIE'S") ftext("JOSIE'S — AVE A",TW/2,TH/2-55,'#22aaff',12,100);
+          if(t.lbl==="SOPHIE'S") ftext("SOPHIE'S SINCE THE 80s",TW/2,TH/2-55,'#22aaff',12,100);
+          if(bank.every(tt=>tt.hit)){
+            bank.forEach(tt=>{tt.hit=false;tt.fl=0;});
+            ftext('STREET SWEEP!',TW/2,TH/2-55,'#22aaff',20,140);
+            burst(TW/2,TH*.6,'#22aaff',28,7);
+            addScore(1500,TW/2,TH/2,'SWEEP!'); bumpMult(); S.bonus();
+            bothBanksDone++;
+            if(bothBanksDone>=2){
+              bothBanksDone=0;
+              triggerMultiball('STREET MULTIBALL','#22aaff',2);
+            }
+          }
+        }
+        if(t.fl>0)t.fl--;
+      });
+    });
+  }
+  doBank(bankL);doBank(bankR);
+
+  // Moving target Lucy's — any ball can collect jackpot
+  activeBalls.forEach(ball=>{
+    const mx=ball.position.x, my=ball.position.y;
+    if(mx+BALL_R>MV.x&&mx-BALL_R<MV.x+MV.w&&my+BALL_R>MV.y&&my-BALL_R<MV.y+MV.h){
+      Body.setVelocity(ball,{x:ball.velocity.x,y:-Math.abs(ball.velocity.y)-2});
+      if(MV.fl===0){
+        MV.fl=25;burst(MV.x+MV.w/2,MV.y,MV.col,16,6);S.rent();
+        if(jackpotLit){ triggerJackpot(); }
+        else { addScore(MV.pts,MV.x+MV.w/2,MV.y-14,"LUCY'S"); bumpMult(); }
+      }
+    }
+  });
+  if(MV.fl>0)MV.fl--;
+
+  // Drain detection — ball must be BELOW flippers+center post (y > TH-30)
+  const allBalls = Composite.allBodies(world).filter(b=>b.label==='pinball');
+  allBalls.forEach(b=>{
+    if(b.position.y > TH - 30){
+      if(b===pinball && !draining){
+        if(ballSaveActive){
+          Body.setVelocity(b,{x:b.velocity.x+(Math.random()-.5)*3,y:-20});
+          Body.setPosition(b,{x:TW/2,y:TH-130});
+        } else {
+          draining=true;
+          Composite.remove(world,b);
+          // Remove all extra balls too
+          Composite.allBodies(world).filter(bb=>bb.label==='pinball')
+            .forEach(bb=>Composite.remove(world,bb));
+          S.drain(); balls--; mult=1; mTimer=0; fever=false; multiballActive=false;
+          setHUD(); assignMission();
+          if(balls<=0){
+            running=false; plungerState='idle';
+            showScreen('over');
+          } else {
+            setTimeout(()=>{
+              draining=false;
+              createBall();
+              ftext('PRESS SPACE TO LAUNCH',TW/2,TH/2,'#ff2266',15,180);
+            }, 1200);
+          }
+        }
+      } else if(b!==pinball){
+        // Extra ball drained — just remove, no ball loss
+        Composite.remove(world,b);
+        if(Composite.allBodies(world).filter(bb=>bb.label==='pinball').length===0
+           && !draining){
+          // Last extra ball gone and main ball is gone — shouldn't happen but safety net
+        }
+      }
+    }
+  });
+
+  // Bumper flash decay
+  bumperFlash.forEach((_,i)=>{ if(bumperFlash[i]>0)bumperFlash[i]--; });
+}
+
+// ── Screens ───────────────────────────────────────────────
+// screenType: 'attract'|'dead'|'over'|null
+let screenType = 'attract';
+function showScreen(type){ screenType = type; }
+function hideScreen(){ screenType = null; }
+function drawGameHUD(){
+  if(!running&&screenType) return;
+
+  // ── Screen flash overlay ──
+  if(flashLife>0){
+    ctx.save();
+    ctx.globalAlpha = (flashLife/22)*0.28;
+    ctx.fillStyle = flashCol;
+    ctx.fillRect(0,0,TW,TH);
+    ctx.restore();
+    flashLife--;
+  }
+
+  // ── Fever bar ──
+  if(fever){
+    const pct = feverTimer/420;
+    const barW = (TW-80)*pct;
+    ctx.save();
+    // background
+    ctx.fillStyle='rgba(0,0,0,.5)';
+    ctx.fillRect(40,TH-30,TW-80,10);
+    // bar
+    const fg=ctx.createLinearGradient(40,0,40+barW,0);
+    fg.addColorStop(0,'#ff4400'); fg.addColorStop(1,'#ffdd00');
+    ctx.fillStyle=fg;
+    ctx.shadowColor='#ff4400'; ctx.shadowBlur=12;
+    ctx.fillRect(40,TH-30,barW,10);
+    ctx.shadowBlur=0;
+    // label
+    ctx.font='900 10px Oswald'; ctx.textAlign='center'; ctx.fillStyle='#ff4400';
+    ctx.shadowColor='#ff4400'; ctx.shadowBlur=8;
+    ctx.fillText('🔥 FEVER',TW/2,TH-33);
+    ctx.shadowBlur=0;
+    ctx.restore();
+  }
+
+  // ── Jackpot lit indicator ──
+  if(jackpotLit){
+    const pulse = Math.sin(Date.now()/120)*0.4+0.6;
+    ctx.save();
+    ctx.globalAlpha=pulse;
+    ctx.font='900 13px Oswald'; ctx.textAlign='center';
+    ctx.fillStyle='#ff88ff'; ctx.shadowColor='#ff44ff'; ctx.shadowBlur=16;
+    ctx.fillText('★ HIT LUCY\'S FOR JACKPOT ★',TW/2,TH-44);
+    ctx.shadowBlur=0;
+    ctx.restore();
+  }
+
+  // ── Mission strip ──
+  if(curMission&&!missionDone&&running){
+    ctx.save();
+    ctx.fillStyle='rgba(0,0,0,.65)';
+    ctx.fillRect(0, TH-62, TW, 20);
+    ctx.font='700 9px Oswald'; ctx.textAlign='center';
+    ctx.fillStyle='rgba(255,221,0,.85)';
+    ctx.fillText('MISSION: '+curMission.txt+' → +'+curMission.reward.toLocaleString(),TW/2,TH-48);
+    ctx.restore();
+  }
+
+  // ── Combo indicator ──
+  if(mult>1&&mTimer>0){
+    ctx.save();
+    ctx.globalAlpha=Math.min(1,mTimer/50);
+    ctx.font='900 17px Oswald'; ctx.textAlign='center';
+    ctx.fillStyle=fever?'#ff4400':'#ffdd00';
+    ctx.shadowColor=fever?'#ff4400':'#ffdd00'; ctx.shadowBlur=18;
+    ctx.fillText('✦ x'+mult+' COMBO'+(fever?' 🔥':'')+'  ✦',TW/2,TH-70);
+    ctx.shadowBlur=0;
+    ctx.restore();
+  }
+  ctx.textAlign='left';
+}
+
+function drawScreen(){
+  if(!screenType) return;
+  const cx=TW/2, cy=TH/2;
+  ctx.fillStyle='rgba(4,0,12,.88)'; ctx.fillRect(0,0,TW,TH);
+  ctx.textAlign='center';
+  const bl=Math.floor(Date.now()/600)%2===0;
+
+  if(screenType==='attract'){
+    // Pulsing title
+    const pulse=Math.sin(Date.now()/400)*0.15+0.85;
+    ctx.save(); ctx.globalAlpha=pulse;
+    ctx.font='900 64px Oswald';
+    const tg=ctx.createLinearGradient(0,cy-110,0,cy-20);
+    tg.addColorStop(0,'#ff2266'); tg.addColorStop(1,'#22aaff');
+    ctx.fillStyle=tg;
+    ctx.shadowColor='#ff2266'; ctx.shadowBlur=40;
+    ctx.fillText('ALPHABET',cx,cy-80);
+    ctx.shadowColor='#22aaff';
+    ctx.fillText('CITY',cx,cy-10);
+    ctx.shadowBlur=0; ctx.restore();
+
+    ctx.font='700 12px Oswald'; ctx.fillStyle='rgba(255,221,0,.9)';
+    ctx.fillText('AVE A · B · C · D  →  MULTIBALL',cx,cy+24);
+    ctx.font='500 10px Special Elite'; ctx.fillStyle='rgba(255,68,136,.65)';
+    ctx.fillText("♪ No Day But Today — East Village, NYC ♪",cx,cy+44);
+
+    // High score
+    if(best>0){
+      ctx.font='700 11px Oswald'; ctx.fillStyle='rgba(255,221,0,.6)';
+      ctx.fillText('BEST: '+best.toLocaleString(),cx,cy+68);
+    }
+
+    ctx.font='900 16px Oswald';
+    ctx.fillStyle=bl?'#ff2266':'rgba(255,34,102,.2)';
+    ctx.shadowColor='#ff2266'; ctx.shadowBlur=bl?18:0;
+    ctx.fillText('▶  CLICK or SPACE TO PLAY  ◀',cx,cy+102);
+    ctx.shadowBlur=0;
+
+    // Preview targets
+    ctx.font='600 9px Oswald'; ctx.fillStyle='rgba(255,255,255,.3)';
+    ctx.fillText('McSORLEY\'S · MONA\'S · CBGB · DOC HOLLIDAY · TOMPKINS SQ',cx,cy+128);
+
+  } else if(screenType==='dead'){
+    ctx.font='900 44px Oswald'; ctx.fillStyle='#ff2266';
+    ctx.shadowColor='#ff2266'; ctx.shadowBlur=28;
+    ctx.fillText('DRAINED',cx,cy-40); ctx.shadowBlur=0;
+    ctx.font='700 14px Oswald'; ctx.fillStyle='#ffdd00';
+    ctx.fillText(balls+' ball'+(balls!==1?'s':'')+' left',cx,cy+2);
+    if(curMission&&!missionDone){
+      ctx.font='600 10px Oswald'; ctx.fillStyle='rgba(255,221,0,.6)';
+      ctx.fillText('MISSION: '+curMission.txt,cx,cy+26);
+    }
+    ctx.font='900 14px Oswald';
+    ctx.fillStyle=bl?'#ff2266':'rgba(255,34,102,.2)';
+    ctx.shadowColor='#ff2266'; ctx.shadowBlur=bl?14:0;
+    ctx.fillText('SPACE or CLICK — LAUNCH!',cx,cy+60);
+    ctx.shadowBlur=0;
+
+  } else if(screenType==='over'){
+    ctx.font='900 52px Oswald'; ctx.fillStyle='#ff2266';
+    ctx.shadowColor='#ff2266'; ctx.shadowBlur=30;
+    ctx.fillText('GAME OVER',cx,cy-50); ctx.shadowBlur=0;
+    ctx.font='700 22px Special Elite'; ctx.fillStyle='#ffdd00';
+    ctx.fillText(score.toLocaleString(),cx,cy+0);
+    if(score>0&&score>=best){
+      ctx.font='900 13px Oswald'; ctx.fillStyle='#ffdd00';
+      ctx.shadowColor='#ffdd00'; ctx.shadowBlur=14;
+      ctx.fillText('★ NEW HIGH SCORE ★',cx,cy+32); ctx.shadowBlur=0;
+    }
+    ctx.font='900 14px Oswald';
+    ctx.fillStyle=bl?'rgba(255,34,102,.85)':'rgba(255,34,102,.2)';
+    ctx.fillText('▶  PLAY AGAIN  ◀',cx,cy+72);
+  }
+  ctx.textAlign='left';
+}
+
+// ── Start / Serve ─────────────────────────────────────────
+function startGame(){
+  score=0;balls=3;mult=1;mTimer=0;
+  fever=false;feverTimer=0;feverHits=0;
+  jackpot=5000;jackpotLit=false;jackpotTimer=0;
+  streak=0;streakTimer=0;flashCol='';flashLife=0;
+  rentHits=0;allBumpersHit=0;bothBanksDone=0;multiballActive=false;
+  mysteryBumper=-1;mysteryTimer=0;ballsInPlay=1;
+  surpriseTimer=Math.floor(Math.random()*300)+400;
+  locked=0;lockCooldown=0;surpriseCooldown=0;
+  bumperFlash.fill(0);
+  aveData.forEach(a=>{a.hit=false;a.fl=0;});
+  bankL.forEach(t=>{t.hit=false;t.fl=0;});
+  bankR.forEach(t=>{t.hit=false;t.fl=0;});
+  PARTS.length=0;FT.length=0;
+  Composite.allBodies(world).filter(b=>b.label==='pinball')
+    .forEach(b=>Composite.remove(world,b));
+  setHUD();hideScreen();
+  running=true;draining=false;
+  plungerState='idle';
+  assignMission();
+  createBall();
+  ftext('PRESS SPACE TO LAUNCH',TW/2,TH/2,'#ff2266',15,180);
+}
+
+// ── Input ─────────────────────────────────────────────────
+const K={};
+function handleAction(){
+  if(!running){ startGame(); return; }
+  if(plungerState === 'charging'){ launchBall(); return; }
+  if(screenType === 'dead'){
+    hideScreen(); draining=false;
+    Composite.allBodies(world).filter(b=>b.label==='pinball')
+      .forEach(b=>Composite.remove(world,b));
+    createBall();
+    ftext('HOLD SPACE TO CHARGE',TW/2,TH/2+40,'#ff2266',13,160);
+  }
+}
+// Wire up every possible entry point
+['keydown'].forEach(ev=>{
+  [document, window].forEach(el=>{
+    el.addEventListener(ev,e=>{
+      K[e.code]=true;
+      try{ au(); }catch(x){}
+      if(['Space','KeyZ','KeyX','Slash','ArrowLeft','ArrowRight','Enter'].includes(e.code))
+        e.preventDefault();
+      if(e.code==='Space'||e.code==='Enter') handleAction();
+      if(e.code==='KeyZ'||e.code==='ArrowLeft')  leftUp=true;
+      if(e.code==='Slash'||e.code==='ArrowRight'||e.code==='KeyX') rightUp=true;
+    });
+  });
+});
+['keyup'].forEach(ev=>{
+  [document, window].forEach(el=>{
+    el.addEventListener(ev,e=>{
+      K[e.code]=false;
+      if(e.code==='KeyZ'||e.code==='ArrowLeft')  leftUp=false;
+      if(e.code==='Slash'||e.code==='ArrowRight'||e.code==='KeyX') rightUp=false;
+    });
+  });
+});
+document.addEventListener('click', ()=>{ try{au();}catch(x){} handleAction(); });
+
+// ── Draw ──────────────────────────────────────────────────
+function drawBg(){
+  ctx.fillStyle='#040008';
+  ctx.fillRect(0,0,TW,TH);
+
+  // Building silhouettes
+  [[36,200,36,600],[462,180,30,640]].forEach(([x,y,w,h])=>{
+    ctx.fillStyle='#07000e';ctx.fillRect(x,y,w,h);
+    for(let wy=y+10;wy<y+h-10;wy+=18)
+      for(let wx=x+4;wx<x+w-3;wx+=12){
+        ctx.fillStyle=Math.random()>.5?'rgba(255,200,60,.09)':'rgba(255,200,60,.02)';
+        ctx.fillRect(wx,wy,8,10);
+      }
+  });
+
+  // Graffiti ghost
+  const GRF=[
+    {t:'RENT',x:52,y:225,sz:88,r:-.04,c:'rgba(255,34,102,.055)'},
+    {t:'NO DAY\nBUT TODAY',x:172,y:418,sz:28,r:-.025,c:'rgba(255,34,102,.042)'},
+    {t:'AVE B',x:105,y:565,sz:62,r:.025,c:'rgba(255,136,0,.042)'},
+    {t:'CBGB',x:258,y:648,sz:52,r:.018,c:'rgba(255,68,0,.038)'},
+    {t:'TSP',x:78,y:710,sz:68,r:-.02,c:'rgba(34,204,102,.03)'},
+  ];
+  GRF.forEach(g=>{
+    ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.r);
+    ctx.font=`900 ${g.sz}px Oswald`;ctx.fillStyle=g.c;
+    g.t.split('\n').forEach((l,li)=>ctx.fillText(l,0,li*g.sz*1.02));
+    ctx.restore();
+  });
+
+  // Scanlines
+  ctx.strokeStyle='rgba(255,34,102,.01)';ctx.lineWidth=1;
+  for(let y=90;y<TH;y+=5){
+    ctx.beginPath();ctx.moveTo(40,y);ctx.lineTo(460,y);ctx.stroke();
+  }
+}
+
+function drawWalls(){
+  ctx.strokeStyle='#1a0028';ctx.lineWidth=3;ctx.lineCap='round';
+  ctx.shadowColor='#ff2266';ctx.shadowBlur=5;
+
+  // Left wall
+  ctx.beginPath();ctx.moveTo(40,100);ctx.lineTo(40,620);ctx.stroke();
+  // Right wall
+  ctx.beginPath();ctx.moveTo(460,100);ctx.lineTo(460,620);ctx.stroke();
+
+  // Flat top shelf — no diagonals anywhere
+  ctx.beginPath();ctx.moveTo(40,100);ctx.lineTo(460,100);ctx.stroke();
+
+  // Plunger lane divider (visual only)
+  ctx.strokeStyle='rgba(255,34,102,.25)';ctx.lineWidth=1;ctx.setLineDash([3,5]);
+  ctx.beginPath();ctx.moveTo(405,100);ctx.lineTo(405,TH-30);ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.shadowBlur=0;
+
+  // Kickers
+  ctx.strokeStyle='#880010';ctx.lineWidth=12;ctx.lineCap='round';
+  ctx.shadowColor='#ff4444';ctx.shadowBlur=10;
+  ctx.beginPath();ctx.moveTo(40,580);ctx.lineTo(95,625);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(460,580);ctx.lineTo(405,625);ctx.stroke();
+  ctx.shadowBlur=0;
+  ctx.lineCap='butt';
+}
+
+function drawBumpers(){
+  bumperData.forEach((b,i)=>{
+    const lit=bumperFlash[i]>0;
+    const isMystery=mysteryBumper===i&&mysteryTimer>0;
+    const mp=isMystery?(Math.sin(Date.now()/140)*0.5+0.5):0;
+    if(lit||isMystery){
+      ctx.beginPath();ctx.arc(b.x,b.y,b.r+(isMystery?16:11),0,Math.PI*2);
+      ctx.strokeStyle=isMystery?`rgba(255,136,255,${mp})`:b.col+'44';ctx.lineWidth=isMystery?6:5;
+      ctx.shadowColor=isMystery?'#ff88ff':b.col;ctx.shadowBlur=isMystery?45:36;ctx.stroke();ctx.shadowBlur=0;
+    }
+    const gd=ctx.createRadialGradient(b.x-b.r*.28,b.y-b.r*.28,2,b.x,b.y,b.r);
+    gd.addColorStop(0,lit?b.col:isMystery?'#440044':'#1a0025');
+    gd.addColorStop(.55,lit?b.col+'66':isMystery?'#220022':'#0d0015');
+    gd.addColorStop(1,'#040008');
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.fillStyle=gd;ctx.fill();
+    ctx.strokeStyle=lit?'#fff':isMystery?`rgba(255,136,255,${0.5+mp*.5})`:b.col;
+    ctx.lineWidth=lit?3:isMystery?3:2;
+    ctx.shadowColor=isMystery?'#ff88ff':b.col;ctx.shadowBlur=lit?28:isMystery?20:10;
+    ctx.beginPath();ctx.arc(b.x,b.y,b.r,0,Math.PI*2);ctx.stroke();ctx.shadowBlur=0;
+    ctx.font=`900 ${b.r>20?8:7}px Oswald`;
+    ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle=lit?'#fff':isMystery?'#ff88ff':b.col;
+    ctx.fillText(isMystery?'★':b.lbl,b.x,b.y);
+    ctx.textBaseline='alphabetic';ctx.textAlign='left';
+  });
+}
+
+function drawTargets(){
+  // Avenue lanes header
+  ctx.font='700 9px Oswald';ctx.textAlign='center';
+  ctx.fillStyle='rgba(255,34,102,.38)';
+  ctx.fillText('SPELL A·B·C·D → MULTIBALL',TW/2,92);ctx.textAlign='left';
+
+  aveData.forEach((a,i)=>{
+    const lit=!a.hit;
+    ctx.shadowColor=a.col;ctx.shadowBlur=lit?(a.fl>0?28:12):0;
+    ctx.fillStyle=lit?a.col:'#1a0025';ctx.fillRect(a.x,a.y,a.w,a.h);ctx.shadowBlur=0;
+    ctx.strokeStyle=a.col;ctx.lineWidth=1.5;ctx.strokeRect(a.x,a.y,a.w,a.h);
+    ctx.font='700 9px Oswald';ctx.textAlign='center';
+    ctx.fillStyle=lit?'#000':'#441122';
+    ctx.fillText(['A','B','C','D'][i],a.x+a.w/2,a.y+a.h*.72);ctx.textAlign='left';
+  });
+
+  [...bankL,...bankR].forEach(t=>{
+    const lit=!t.hit;
+    ctx.shadowColor=t.col;ctx.shadowBlur=lit?7:0;
+    ctx.fillStyle=lit?t.col:'#0a0018';ctx.fillRect(t.x,t.y,t.w,t.h);ctx.shadowBlur=0;
+    ctx.font='600 6.5px Oswald';ctx.textAlign='center';
+    ctx.fillStyle=lit?'#000':'#333';
+    ctx.fillText(t.lbl,t.x+t.w/2,t.y+t.h*.72);ctx.textAlign='left';
+  });
+
+  // Moving target
+  ctx.shadowColor=MV.col;ctx.shadowBlur=MV.fl>0?18:7;
+  ctx.fillStyle=MV.fl>0?MV.col:'#1a0030';ctx.fillRect(MV.x,MV.y,MV.w,MV.h);ctx.shadowBlur=0;
+  ctx.strokeStyle=MV.col;ctx.lineWidth=1.5;ctx.strokeRect(MV.x,MV.y,MV.w,MV.h);
+  ctx.font='700 8px Oswald';ctx.textAlign='center';
+  ctx.fillStyle=MV.fl>0?'#000':MV.col;
+  ctx.fillText(MV.lbl,MV.x+MV.w/2,MV.y+MV.h*.72);ctx.textAlign='left';
+}
+
+function drawFlippers(){
+  const FL=80;
+
+  function drawOneFlipper(px, py, tx, ty){
+    // Tapered flipper: thick at pivot, thin at tip
+    // Build polygon: 4 points defining a trapezoid
+    const dx = tx-px, dy = ty-py;
+    const len = Math.hypot(dx,dy);
+    const nx = -dy/len, ny = dx/len; // normal (perpendicular)
+
+    const thick = 7;  // tip half-thickness
+    const pivot = 13; // pivot half-thickness
+
+    // 4 corners of tapered flipper
+    const pts = [
+      {x: px + nx*pivot,  y: py + ny*pivot},   // pivot top
+      {x: px - nx*pivot,  y: py - ny*pivot},   // pivot bottom
+      {x: tx - nx*thick,  y: ty - ny*thick},   // tip bottom
+      {x: tx + nx*thick,  y: ty + ny*thick},   // tip top
+    ];
+
+    // Outer glow
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,34,102,.15)';
+    ctx.fill();
+
+    // Main body gradient
+    const grad = ctx.createLinearGradient(px, py-pivot, px, py+pivot);
+    grad.addColorStop(0,   '#ff6688');
+    grad.addColorStop(0.4, '#ff2266');
+    grad.addColorStop(1,   '#aa1144');
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.fillStyle = grad;
+    ctx.shadowColor = '#ff2266';
+    ctx.shadowBlur  = 18;
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+
+    // Top highlight edge
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    ctx.lineTo(pts[3].x, pts[3].y);
+    ctx.strokeStyle = 'rgba(255,200,220,.55)';
+    ctx.lineWidth   = 2;
+    ctx.lineCap     = 'round';
+    ctx.stroke();
+
+    // Outline
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
+    ctx.closePath();
+    ctx.strokeStyle = '#ff2266';
+    ctx.lineWidth   = 1.5;
+    ctx.shadowColor = '#ff2266';
+    ctx.shadowBlur  = 10;
+    ctx.stroke();
+    ctx.shadowBlur  = 0;
+
+    // Pivot cap — solid glowing circle
+    ctx.beginPath();
+    ctx.arc(px, py, pivot, 0, Math.PI*2);
+    const capGrad = ctx.createRadialGradient(px-3, py-3, 1, px, py, pivot);
+    capGrad.addColorStop(0, '#ff88aa');
+    capGrad.addColorStop(1, '#cc1144');
+    ctx.fillStyle   = capGrad;
+    ctx.shadowColor = '#ff2266';
+    ctx.shadowBlur  = 14;
+    ctx.fill();
+    ctx.shadowBlur  = 0;
+    ctx.strokeStyle = '#ff4488';
+    ctx.lineWidth   = 1.5;
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+  }
+
+  const ltx = leftPivot.x  + Math.cos(lfAngle)*FL;
+  const lty = leftPivot.y  + Math.sin(lfAngle)*FL;
+  const rtx = rightPivot.x + Math.cos(rfAngle)*FL;
+  const rty = rightPivot.y + Math.sin(rfAngle)*FL;
+
+  drawOneFlipper(leftPivot.x,  leftPivot.y,  ltx, lty);
+  drawOneFlipper(rightPivot.x, rightPivot.y, rtx, rty);
+}
+
+function drawCenterPost(){
+  // Center post — radius 24 mathematically seals the flipper gap
+  const cx = TW/2, cy = TH-88, r = 24;
+
+  // Outer glow ring
+  ctx.beginPath(); ctx.arc(cx,cy,r+6,0,Math.PI*2);
+  ctx.strokeStyle='rgba(255,34,102,.25)'; ctx.lineWidth=4;
+  ctx.shadowColor='#ff2266'; ctx.shadowBlur=24; ctx.stroke(); ctx.shadowBlur=0;
+
+  // Main body
+  const g=ctx.createRadialGradient(cx-6,cy-6,2,cx,cy,r);
+  g.addColorStop(0,'#ff88aa'); g.addColorStop(.45,'#ff2266'); g.addColorStop(1,'#660011');
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2);
+  ctx.fillStyle=g; ctx.shadowColor='#ff2266'; ctx.shadowBlur=20; ctx.fill(); ctx.shadowBlur=0;
+
+  // Rim
+  ctx.strokeStyle='#ff4488'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(cx,cy,r,0,Math.PI*2); ctx.stroke();
+
+  // Label
+  ctx.font='900 8px Oswald'; ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillStyle='rgba(255,255,255,.7)'; ctx.fillText('POST',cx,cy);
+  ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+}
+
+function drawBalls(){
+  Composite.allBodies(world).filter(b=>b.label==='pinball').forEach(b=>{
+    const x=b.position.x,y=b.position.y;
+    const g=ctx.createRadialGradient(x-BALL_R*.35,y-BALL_R*.35,1,x,y,BALL_R);
+    g.addColorStop(0,'#fff');g.addColorStop(.3,'#ffbbcc');
+    g.addColorStop(.7,'#cc1144');g.addColorStop(1,'#440018');
+    ctx.beginPath();ctx.arc(x,y,BALL_R,0,Math.PI*2);
+    ctx.fillStyle=g;ctx.shadowColor='#ff2266';ctx.shadowBlur=20;
+    ctx.fill();ctx.shadowBlur=0;
+  });
+}
+
+function drawVFX(){
+  // Particles
+  for(let i=PARTS.length-1;i>=0;i--){
+    const p=PARTS[i];p.x+=p.vx;p.y+=p.vy;
+    p.vy+=.09;p.vx*=.93;p.life--;
+    if(p.life<=0){PARTS.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=p.life/p.max;
+    ctx.shadowColor=p.col;ctx.shadowBlur=7;
+    ctx.fillStyle=p.col;
+    ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,Math.PI*2);ctx.fill();
+    ctx.restore();
+  }
+  // Floating text
+  for(let i=FT.length-1;i>=0;i--){
+    const f=FT[i];f.y+=f.vy;f.life--;
+    if(f.life<=0){FT.splice(i,1);continue;}
+    ctx.save();ctx.globalAlpha=Math.min(1,f.life/30);
+    ctx.font=`900 ${f.sz}px Oswald`;ctx.textAlign='center';
+    ctx.fillStyle=f.col;ctx.shadowColor=f.col;ctx.shadowBlur=11;
+    ctx.fillText(f.t,f.x,f.y);ctx.restore();
+  }
+  ctx.textAlign='left';
+  // Mult indicator
+  if(mult>1&&mTimer>0){
+    ctx.save();ctx.globalAlpha=Math.min(1,mTimer/45);
+    ctx.font='900 16px Oswald';ctx.textAlign='center';
+    ctx.fillStyle='#ffdd00';ctx.shadowColor='#ffdd00';ctx.shadowBlur=16;
+    ctx.fillText('✦ x'+mult+' COMBO ✦',TW/2,TH-138);ctx.restore();ctx.textAlign='left';
+  }
+}
+
+// ── Main loop ─────────────────────────────────────────────
+let lastTime=0;
+let tick=0;
+function loop(ts){
+  const dt=Math.min(ts-lastTime,32)/1000;
+  lastTime=ts;tick++;
+
+  // Move moving target
+  MV.x+=MV.vx;
+  if(MV.x<55||MV.x+MV.w>420)MV.vx*=-1;
+
+  // Plunger charge — hold Space to build power
+  if(plungerState==='charging'){
+    if(K['Space']||K['Enter']){
+      plungerCharge = Math.min(1, plungerCharge + 0.018);
+    }
+    // Keep ball centered in lane while charging — collisions still off
+    if(pinball){
+      Body.setPosition(pinball, {x:432, y:500});
+      Body.setVelocity(pinball,  {x:0,  y:0});
+    }
+  }
+
+  // Multiplier decay
+  if(mTimer>0&&--mTimer===0){mult=1;setHUD();}
+
+  // Fever decay
+  if(fever){
+    feverTimer--;
+    if(feverTimer<=0){ fever=false; feverHits=0; ftext('FEVER OVER',TW/2,TH/2-60,'#ff4400',14,80); setHUD(); }
+  }
+
+  // Jackpot timer
+  if(jackpotLit&&--jackpotTimer<=0){ jackpotLit=false; }
+
+  // Mystery bumper timer
+  if(mysteryTimer>0){ mysteryTimer--;
+    if(mysteryTimer===0) mysteryBumper=-1; }
+
+  // Streak decay
+  if(streakTimer>0&&--streakTimer===0){ streak=0; }
+
+  // Surprise events — fire every 8-14 seconds of active play
+  if(running&&plungerState==='launched'&&!draining){
+    surpriseTimer--;
+    if(surpriseTimer<=0){
+      const s=SURPRISES[Math.floor(Math.random()*SURPRISES.length)];
+      s();
+      surpriseTimer=Math.floor(Math.random()*360)+480; // next surprise in 8-14s
+    }
+  }
+
+  if(running){
+    updateFlipperBodies();
+    Engine.update(engine,1000/60);
+    checkHits();
+  }
+
+  // Draw
+  ctx.clearRect(0,0,TW,TH);
+  drawBg();
+  drawWalls();
+  drawTargets();
+  drawBumpers();
+  drawFlippers();
+  if(running) drawBalls();
+  drawCenterPost();   // always in front of everything
+  // Draw plunger spring when ball waiting in lane
+  if(plungerState==='charging'&&pinball){
+    const barH = 20 + plungerCharge * 70;
+    const barY = 495 - barH;
+    const hue  = 200 - plungerCharge * 160;
+    ctx.fillStyle = `hsl(${hue},90%,55%)`;
+    ctx.shadowColor= `hsl(${hue},90%,55%)`;
+    ctx.shadowBlur = 12 + plungerCharge * 18;
+    ctx.fillRect(420, barY, 24, barH);
+    ctx.shadowBlur = 0;
+    ctx.font='700 9px Oswald'; ctx.textAlign='center'; ctx.fillStyle='#ff2266';
+    ctx.fillText(plungerCharge>0.5?'LET RIP!':'HOLD SPACE',432,barY-8);
+    ctx.textAlign='left';
+  }
+  drawVFX();
+  drawScreen();
+  drawGameHUD();
+
+  requestAnimationFrame(loop);
+}
+
+// ── Init ─────────────────────────────────────────────────
+buildTable();
+buildFlippers();
+setHUD();
+screenType='attract';
+requestAnimationFrame(loop);
+}); // end window.load
+</script>
+</body>
+</html>
